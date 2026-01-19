@@ -262,7 +262,7 @@ const App: React.FC = () => {
               onClick={handleDownloadPdf}
               className={`bg-yellow-500 hover:bg-yellow-400 text-slate-900 px-6 py-2.5 rounded-full font-bold shadow-xl transition-all active:scale-95 text-sm flex items-center gap-2 ${isDownloading ? 'opacity-50 cursor-wait' : ''}`}
             >
-              <span>{isDownloading ? '⏳' : '💾'}</span> {isDownloading ? (lang === 'FI' ? 'Luodaan...' : 'Creating...') : (lang === 'FI' ? 'Lataa PDF' : 'Download PDF')}
+              <span>{isDownloading ? '⏳' : '💾'}</span> {isDownloading ? (lang === 'FI' ? 'Luodaan...' : 'Creating...') : (lang === 'FI' ? 'Download PDF' : 'Download PDF')}
             </button>
             <button 
               onClick={() => { triggerVibrate(); playSound('click'); window.print(); }}
@@ -273,7 +273,8 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className="pt-24 pb-12 flex-1 flex items-start justify-center overflow-x-hidden no-scrollbar print:p-0 print:m-0 print:block">
-          <Certificate name={firstName} imageUrl={resultImage} date={new Date().toLocaleDateString(lang === 'FI' ? 'fi-FI' : 'en-US')} />
+          {/* Passed 'lang' prop to Certificate */}
+          <Certificate name={firstName} imageUrl={resultImage} date={new Date().toLocaleDateString(lang === 'FI' ? 'fi-FI' : 'en-US')} lang={lang} />
         </div>
       </div>
     );
