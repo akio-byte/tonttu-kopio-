@@ -2,18 +2,38 @@
 import { GoogleGenAI } from "@google/genai";
 import { ElfStyle, GroupType, UpscaleLevel } from "../types";
 
+const STYLE_ANCHORS: Record<ElfStyle, string> = {
+  classic: `Traditional Lapland Christmas portrait. Deep red velvet elf coat with subtle gold trim, warm fur accents, knitted details. Background: softly lit wooden cabin interior or gentle snowy forest bokeh. Warm, cozy, cinematic winter lighting.`,
+  frost: `Arctic frost elf portrait. Icy-blue and white winter clothing with fur trim, subtle aurora glow accents. Background: snowy landscape with soft northern lights bokeh. Cool, crisp lighting but natural skin tones.`,
+  forest: `Northern forest elf portrait. Earthy greens and dark reds, wool and leather textures, pine and snow elements. Background: spruce forest, soft snowfall, warm lantern bokeh. Natural, storybook realism.`,
+  royal: `Festive royal elf portrait. Elegant deep red / burgundy attire, refined gold embroidery, luxurious fur trim. Background: subtle winter palace / grand cabin vibe with soft candlelight bokeh. Premium portrait look, but still realistic.`
+};
+
 export async function upscalePortrait(base64Image: string, style: ElfStyle, level: UpscaleLevel): Promise<string> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
+  const styleAnchor = STYLE_ANCHORS[style];
+
   const prompt = `
-    UPSCALING TASK: Take this generated elven portrait and enhance it to ultra-high resolution (${level}).
-    
-    INSTRUCTIONS:
-    1. Maintain all core facial features and identities perfectly.
-    2. Enhance fine details: skin texture, fabric weave of the elven attire, individual strands of hair/fur, and the clarity of the eyes.
-    3. Sharpen the magical elements: make the crystalline snowflakes more defined and the Aurora Borealis glow more luminous.
-    4. Remove any subtle artifacts and produce a masterpiece suitable for large-format professional printing.
-    5. The final output must be breathtakingly sharp and cinematic.
+    TASK: Enhance and upscale the provided generated portrait while preserving identity and the chosen style.
+
+    CRITICAL PRESERVATION:
+    - Preserve face identity exactly. Do NOT alter facial structure, age, gender, or skin tone.
+    - Improve sharpness and clarity naturally (eyes, eyelashes, eyebrows, hair edges).
+    - Remove artifacts: banding, noise blobs, smudges, warped areas.
+    - Keep the same clothing and style direction.
+
+    BEAUTIFICATION & HEALTH:
+    - Ensure skin looks healthy, radiant, and well-rested. 
+    - Diminish dark circles under eyes and softly smooth out excessive wrinkles without making the face look waxy or "plastic".
+    - The person should look vibrant and healthy while remaining 100% recognizable.
+
+    STYLE LOCK:
+    ${styleAnchor}
+
+    NEGATIVE CONSTRAINTS:
+    - No changes to face proportions or expression.
+    - No new text, no watermark, no logos.
+    - No plastic skin, no over-smoothing, no heavy beauty filters.
   `;
 
   try {
@@ -62,51 +82,57 @@ export async function upscalePortrait(base64Image: string, style: ElfStyle, leve
 
 export async function transformToElf(base64Image: string, style: ElfStyle = 'classic', groupType: GroupType = 'single'): Promise<string> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  let styleSpecifics = "";
-  switch(style) {
-    case 'frost':
-      styleSpecifics = "STYLE: Frost and Ice. Attire is shimmering silver and icy blue velvet with crystal ornaments. Background features heavy frost, glowing ice sculptures, and a brilliant white/blue Aurora Borealis. The mood is cool and ethereal.";
-      break;
-    case 'forest':
-      styleSpecifics = "STYLE: Woodland and Earthy. Attire is deep moss green and earthy brown wool with pinecone and leaf embroidery. Background is a thick evergreen forest with soft snow and mystical forest fireflies. The mood is natural and cozy.";
-      break;
-    case 'royal':
-      styleSpecifics = "STYLE: Royal and Majestic. Attire is royal purple and gold with extravagant silk and silver thread. The elf hat features a large golden bell. Background is a grand, candle-lit wooden hall in Lapland with luxury decorations. The mood is noble and grand.";
-      break;
-    case 'classic':
-    default:
-      styleSpecifics = "STYLE: Classic Nordic. Attire is deep burgundy velvet with silver fur trim and a traditional tall red hat. Background is a snow-laden ancient forest at twilight with warm lanterns. The mood is traditional and heartwarming.";
-      break;
+  const styleAnchor = STYLE_ANCHORS[style];
+
+  let prompt = "";
+
+  if (groupType === 'group') {
+    prompt = `
+      TASK: Transform ALL people in the provided group photo into realistic Lapland Christmas elves.
+
+      IDENTITY & FACE (CRITICAL):
+      - Preserve each person’s face identity exactly.
+      - Keep faces natural, correctly proportioned, and clearly visible.
+      - Use the same elf style for everyone.
+
+      BEAUTIFICATION & HEALTH:
+      - Improve skin appearance to look healthy and radiant.
+      - Diminish dark circles under eyes and softly smooth wrinkles on all faces.
+      - People should look like refreshed, vibrant versions of themselves.
+
+      STYLE:
+      ${styleAnchor}
+
+      BACKGROUND CONTROL:
+      - Simple winter background consistent with the style, not distracting.
+
+      NEGATIVE CONSTRAINTS:
+      - No text, no symbols, no logos.
+      - No extra faces, no missing faces.
+      - No extra limbs, no cartoon style.
+    `;
+  } else {
+    prompt = `
+      TASK: Transform the person in the image into a realistic Lapland Christmas elf.
+
+      IDENTITY & FACE (CRITICAL):
+      - Preserve face identity exactly (same facial structure, age, gender, skin tone).
+      - Portrait framing (head-and-shoulders or waist-up).
+
+      BEAUTIFICATION & HEALTH:
+      - Improve the person's appearance to look very healthy and radiant.
+      - Diminish dark circles under the eyes and softly smooth out deep wrinkles and skin imperfections.
+      - The result should be a vibrant, healthy-looking elf version of the original person.
+
+      STYLE:
+      ${styleAnchor}
+
+      NEGATIVE CONSTRAINTS (ABSOLUTE):
+      - No text, no symbols, no logos, no watermarks.
+      - No extra faces, no extra limbs.
+      - No cartoon, no anime, no illustration, no plastic skin.
+    `;
   }
-
-  const groupInstruction = groupType === 'group' 
-    ? "TRANSFORM ALL PEOPLE: There are multiple people in this tourist photo. You MUST transform EVERY SINGLE PERSON into an elf. Each person should have their own unique, high-quality elven costume and hat while keeping their original facial identity perfectly recognizable. Treat this as a festive family/group vacation portrait in Lapland."
-    : "TRANSFORM THE INDIVIDUAL: Transform the person in this photo into a legendary elf. Maintain their identity perfectly.";
-
-  const prompt = `
-    Create a breathtaking, ultra-high-definition cinematic portrait from the mystical heart of Lapland.
-    
-    ${styleSpecifics}
-
-    ${groupInstruction}
-
-    CORE REQUIREMENTS:
-    1. IDENTITY PRESERVATION: For every person in the image, the face must be rendered with perfect clarity and 1:1 likeness. They should look exactly like themselves, but transformed into ethereal elven beings. Maintain facial structure, eyes, and expressions with sharp focus.
-    
-    2. THE TONTTU AESTHETIC: 
-       - ELVEN FEATURES: Elegant, slightly pointed ears with fine detail. 
-       - TEXTURE: Visible fabric weave, frost on the eyelashes, and subtle rosy cheeks as if touched by the Arctic cold.
-    
-    3. MAGICAL LIGHTING & ATMOSPHERE:
-       - LIGHTING: Soft Rembrandt lighting on the face(s), complemented by a vibrant magical rim light from the Aurora Borealis. Ethereal golden hour glow.
-       - MAGIC EFFECTS: Shimmering air, tiny floating crystalline snowflakes, and a subtle "sparkle" in the eyes that reflects festive lanterns.
-       - TOURISM CONTEXT: This should feel like the ultimate, high-end souvenir photo from a magical trip to Rovaniemi, Lapland.
-    
-    4. TECHNICAL EXCELLENCE:
-       - QUALITY: 8k resolution, photorealistic fantasy style, cinematic bokeh, sharp textures.
-       - RESTRICTIONS: NO cartoonish proportions, NO blurry faces, NO generic AI look. It must look like a high-budget holiday movie poster.
-  `;
 
   try {
     const response = await ai.models.generateContent({

@@ -38,6 +38,7 @@ export interface Translation {
   upscaleSuccess: string;
   // Certificate additions
   btnCreateCert: string;
+  btnEditName: string;
   btnDownloadImage: string;
   inputNamePlaceholder: string;
   inputGroupNamePlaceholder: string;

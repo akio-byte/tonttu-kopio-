@@ -30,6 +30,8 @@ const App: React.FC = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [bgMusicPlaying, setBgMusicPlaying] = useState(false);
   const [currentResolution, setCurrentResolution] = useState<UpscaleLevel>('1K');
+  const [certDate, setCertDate] = useState<string>(new Date().toLocaleDateString('fi-FI'));
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -97,14 +99,23 @@ const App: React.FC = () => {
     setState('groupSelect');
   };
 
-  const startCamera = async () => {
+  const stopCamera = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  const startCamera = async (mode: 'user' | 'environment' = facingMode) => {
+    stopCamera();
     setState('camera');
     if (!bgMusicPlaying && bgMusicRef.current) {
       toggleMusic();
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } 
+        video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 720 } } 
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -113,6 +124,14 @@ const App: React.FC = () => {
       setErrorMsg("Kameraa ei voitu avata. Tarkista luvat laitteen asetuksista.");
       setState('error');
     }
+  };
+
+  const toggleCamera = () => {
+    triggerVibrate();
+    playSound('click');
+    const newMode = facingMode === 'user' ? 'environment' : 'user';
+    setFacingMode(newMode);
+    startCamera(newMode);
   };
 
   const capturePhoto = () => {
@@ -124,14 +143,16 @@ const App: React.FC = () => {
       canvas.height = video.videoHeight;
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.translate(canvas.width, 0);
-        ctx.scale(-1, 1);
+        // Only mirror if it's the front camera
+        if (facingMode === 'user') {
+          ctx.translate(canvas.width, 0);
+          ctx.scale(-1, 1);
+        }
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL('image/png');
         setCapturedImage(dataUrl);
         playSound('capture');
-        const stream = video.srcObject as MediaStream;
-        stream?.getTracks().forEach(track => track.stop());
+        stopCamera();
         setState('styleSelect');
       }
     }
@@ -191,6 +212,7 @@ const App: React.FC = () => {
     setShowNameInput(false);
     setState('hero');
     setCurrentResolution('1K');
+    stopCamera();
   };
 
   const handleDownloadImage = () => {
@@ -215,27 +237,49 @@ const App: React.FC = () => {
 
     try {
       const canvas = await html2canvas(element, {
-        scale: 3,
+        scale: 4, 
         useCORS: true,
+        allowTaint: true,
         logging: false,
-        backgroundColor: '#fdf9f0',
+        backgroundColor: null,
         onclone: (clonedDoc) => {
           const clonedElement = clonedDoc.getElementById('certificate-parchment');
           if (clonedElement) {
             clonedElement.style.transform = 'none';
+            clonedElement.style.width = '210mm';
+            clonedElement.style.height = '297mm';
           }
         }
       });
 
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
-        format: 'a4'
+        format: 'a4',
+        compress: true
       });
 
-      pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+      const pageWidth = 210;
+      const pageHeight = 297;
+      const canvasWidth = canvas.width;
+      const canvasHeight = canvas.height;
+      const canvasAspectRatio = canvasWidth / canvasHeight;
+
+      let imgWidth = pageWidth;
+      let imgHeight = pageWidth / canvasAspectRatio;
+
+      if (imgHeight > pageHeight) {
+        imgHeight = pageHeight;
+        imgWidth = pageHeight * canvasAspectRatio;
+      }
+
+      const xOffset = (pageWidth - imgWidth) / 2;
+      const yOffset = (pageHeight - imgHeight) / 2;
+
+      pdf.addImage(imgData, 'PNG', xOffset, yOffset, imgWidth, imgHeight, undefined, 'SLOW');
       pdf.save(`Tonttudiplomi_${firstName || 'Tonttu'}.pdf`);
+      
       playSound('magic');
     } catch (err) {
       console.error('PDF generation failed:', err);
@@ -248,33 +292,52 @@ const App: React.FC = () => {
   if (state === 'certificate' && resultImage) {
     return (
       <div className="bg-[#020617] min-h-[100dvh] flex flex-col overflow-x-hidden print:bg-white print:min-h-0 print:overflow-visible">
-        <div className="fixed top-4 left-4 right-4 z-50 flex flex-wrap gap-2 justify-between print:hidden">
-          <button 
-            onClick={() => { triggerVibrate(); playSound('click'); setState('result'); }}
-            className="bg-white/10 hover:bg-white/20 text-white px-5 py-2.5 rounded-full border border-white/20 backdrop-blur-md transition-all active:scale-95 text-sm font-bold shadow-xl flex items-center gap-2"
-          >
-            <span>←</span> {lang === 'FI' ? 'Takaisin' : 'Back'}
-          </button>
+        {/* Navigation & Real-time Edit Bar */}
+        <div className="fixed top-0 left-0 right-0 z-50 bg-slate-950/80 backdrop-blur-xl border-b border-white/10 p-4 flex flex-col md:flex-row gap-4 justify-between items-center print:hidden">
+          <div className="flex gap-4 items-center">
+            <button 
+              onClick={() => { triggerVibrate(); playSound('click'); setState('result'); setShowNameInput(false); }}
+              className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-full border border-white/20 transition-all active:scale-95 text-xs font-bold flex items-center gap-2"
+            >
+              <span>←</span> {lang === 'FI' ? 'Takaisin' : 'Back'}
+            </button>
+            <div className="h-6 w-[1px] bg-white/10 hidden md:block"></div>
+            <div className="flex gap-3">
+               <input 
+                 type="text" 
+                 value={firstName} 
+                 onChange={(e) => setFirstName(e.target.value)} 
+                 placeholder={t.inputNamePlaceholder} 
+                 className="bg-white/5 border border-white/20 rounded-lg px-4 py-2 text-sm text-white focus:border-yellow-400 focus:bg-white/10 outline-none transition-all w-48 font-christmas tracking-widest"
+               />
+               <input 
+                 type="text" 
+                 value={certDate} 
+                 onChange={(e) => setCertDate(e.target.value)} 
+                 className="bg-white/5 border border-white/20 rounded-lg px-4 py-2 text-sm text-white focus:border-yellow-400 focus:bg-white/10 outline-none transition-all w-32"
+               />
+            </div>
+          </div>
           
           <div className="flex gap-2">
             <button 
               disabled={isDownloading}
               onClick={handleDownloadPdf}
-              className={`bg-yellow-500 hover:bg-yellow-400 text-slate-900 px-6 py-2.5 rounded-full font-bold shadow-xl transition-all active:scale-95 text-sm flex items-center gap-2 ${isDownloading ? 'opacity-50 cursor-wait' : ''}`}
+              className={`bg-yellow-500 hover:bg-yellow-400 text-slate-900 px-6 py-2 rounded-full font-bold shadow-xl transition-all active:scale-95 text-sm flex items-center gap-2 ${isDownloading ? 'opacity-50 cursor-wait' : ''}`}
             >
-              <span>{isDownloading ? '⏳' : '💾'}</span> {isDownloading ? (lang === 'FI' ? 'Luodaan...' : 'Creating...') : (lang === 'FI' ? 'Download PDF' : 'Download PDF')}
+              <span>{isDownloading ? '⏳' : '💾'}</span> {isDownloading ? (lang === 'FI' ? 'Luodaan...' : 'Creating...') : (lang === 'FI' ? 'Lataa PDF' : 'Download PDF')}
             </button>
             <button 
               onClick={() => { triggerVibrate(); playSound('click'); window.print(); }}
-              className="bg-red-600 hover:bg-red-500 text-white px-6 py-2.5 rounded-full font-bold shadow-[0_0_20px_rgba(220,38,38,0.5)] transition-all active:scale-95 text-sm flex items-center gap-2"
+              className="bg-red-600 hover:bg-red-500 text-white px-6 py-2 rounded-full font-bold shadow-xl transition-all active:scale-95 text-sm flex items-center gap-2"
             >
                <span>🖨️</span> {t.btnPrint}
             </button>
           </div>
         </div>
-        <div className="pt-24 pb-12 flex-1 flex items-start justify-center overflow-x-hidden no-scrollbar print:p-0 print:m-0 print:block">
-          {/* Passed 'lang' prop to Certificate */}
-          <Certificate name={firstName} imageUrl={resultImage} date={new Date().toLocaleDateString(lang === 'FI' ? 'fi-FI' : 'en-US')} lang={lang} />
+
+        <div className="pt-32 md:pt-24 pb-12 flex-1 flex items-start justify-center overflow-x-hidden no-scrollbar print:p-0 print:m-0 print:block">
+          <Certificate name={firstName} imageUrl={resultImage} date={certDate} lang={lang} />
         </div>
       </div>
     );
@@ -354,7 +417,7 @@ const App: React.FC = () => {
                <h2 className="text-3xl md:text-5xl font-christmas text-red-100 mb-8">{t.groupSelectTitle}</h2>
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 mb-10">
                   <button
-                    onClick={() => { triggerVibrate(); playSound('click'); setGroupType('single'); startCamera(); }}
+                    onClick={() => { triggerVibrate(); playSound('click'); setGroupType('single'); setFacingMode('user'); startCamera('user'); }}
                     className="group relative overflow-hidden rounded-2xl border-2 border-white/10 bg-white/5 p-8 transition-all hover:bg-white/10 hover:border-red-500 hover:scale-[1.02]"
                   >
                     <div className="text-5xl mb-4 group-hover:scale-110 transition-transform">👤</div>
@@ -362,7 +425,7 @@ const App: React.FC = () => {
                     <p className="text-white/60 text-sm">{t.groupSelectSingleDesc}</p>
                   </button>
                   <button
-                    onClick={() => { triggerVibrate(); playSound('click'); setGroupType('group'); startCamera(); }}
+                    onClick={() => { triggerVibrate(); playSound('click'); setGroupType('group'); setFacingMode('environment'); startCamera('environment'); }}
                     className="group relative overflow-hidden rounded-2xl border-2 border-white/10 bg-white/5 p-8 transition-all hover:bg-white/10 hover:border-red-500 hover:scale-[1.02]"
                   >
                     <div className="text-5xl mb-4 group-hover:scale-110 transition-transform">👥</div>
@@ -376,9 +439,26 @@ const App: React.FC = () => {
 
           {state === 'camera' && (
             <div className="relative w-full max-w-md md:max-w-2xl aspect-[3/4] md:aspect-video rounded-[2rem] md:rounded-[3rem] overflow-hidden border-8 border-white/20 shadow-2xl animate-in slide-in-from-bottom-12 duration-700">
-              <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover scale-x-[-1]" />
+              <video 
+                ref={videoRef} 
+                autoPlay 
+                playsInline 
+                className={`w-full h-full object-cover ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`} 
+              />
               <div className="absolute inset-0 pointer-events-none border-[16px] border-white/5"></div>
-              <div className="absolute bottom-12 left-0 right-0 flex justify-center">
+              
+              {/* Shutter Button */}
+              <div className="absolute bottom-12 left-0 right-0 flex justify-center items-center gap-8">
+                <button 
+                  onClick={toggleCamera} 
+                  className="bg-white/10 backdrop-blur-md border border-white/20 text-white rounded-full p-4 hover:bg-white/20 transition-all active:scale-90"
+                  title="Vaihda kamera"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+
                 <button 
                   onClick={capturePhoto} 
                   className="bg-white text-slate-900 rounded-full p-6 md:p-8 shadow-[0_0_50px_rgba(255,255,255,0.6)] transform transition hover:scale-110 active:scale-75 relative"
@@ -386,7 +466,10 @@ const App: React.FC = () => {
                   <div className="w-14 h-14 md:w-16 md:h-16 border-[6px] border-red-600 rounded-full"></div>
                   <div className="absolute -inset-2 rounded-full border border-white/40 animate-ping opacity-20"></div>
                 </button>
+
+                <div className="w-16"></div> {/* Spacer to keep shutter centered */}
               </div>
+
               <div className="absolute top-10 left-0 right-0 text-white font-christmas text-2xl tracking-[0.2em] drop-shadow-xl animate-pulse">
                 {t.smileText}
               </div>
