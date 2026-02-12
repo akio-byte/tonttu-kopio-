@@ -9,31 +9,46 @@ const STYLE_ANCHORS: Record<ElfStyle, string> = {
   royal: `Festive royal elf portrait. Elegant deep red / burgundy attire, refined gold embroidery, luxurious fur trim. Background: subtle winter palace / grand cabin vibe with soft candlelight bokeh. Premium portrait look, but still realistic.`
 };
 
+/**
+ * Common instructions for health and beautification to ensure consistent "healthy" look.
+ */
+const HEALTH_RULES = `
+  BEAUTIFICATION & RADIANCE (CRITICAL):
+  - The person must look exceptionally healthy, rested, and vibrant.
+  - Remove all dark circles under the eyes completely.
+  - Softly smooth out deep wrinkles, frown lines, and skin imperfections while keeping natural skin pores visible (no waxy/plastic look).
+  - Even out skin tone for a clear, glowing complexion.
+  - Eyes should be bright, clear, and sharp.
+  - The transformation should look like the person spent a month resting in the pure Arctic air.
+`;
+
 export async function upscalePortrait(base64Image: string, style: ElfStyle, level: UpscaleLevel): Promise<string> {
+  if (!process.env.API_KEY) throw new Error("API_KEY is missing");
+  
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const styleAnchor = STYLE_ANCHORS[style];
 
   const prompt = `
-    TASK: Enhance and upscale the provided generated portrait while preserving identity and the chosen style.
+    TASK: Enhance and upscale the provided generated portrait to ${level} resolution.
+    
+    IDENTITY PRESERVATION:
+    - You MUST maintain the person's identity 100%. No changes to facial structure, bone structure, or ethnic features.
+    - Keep the same pose and expression.
+    
+    ${HEALTH_RULES}
 
-    CRITICAL PRESERVATION:
-    - Preserve face identity exactly. Do NOT alter facial structure, age, gender, or skin tone.
-    - Improve sharpness and clarity naturally (eyes, eyelashes, eyebrows, hair edges).
-    - Remove artifacts: banding, noise blobs, smudges, warped areas.
-    - Keep the same clothing and style direction.
-
-    BEAUTIFICATION & HEALTH:
-    - Ensure skin looks healthy, radiant, and well-rested. 
-    - Diminish dark circles under eyes and softly smooth out excessive wrinkles without making the face look waxy or "plastic".
-    - The person should look vibrant and healthy while remaining 100% recognizable.
+    QUALITY ENHANCEMENT:
+    - Sharpen facial features (lashes, iris, eyebrows) naturally.
+    - Remove compression artifacts, noise, and color banding.
+    - Ensure lighting consistency across the face.
 
     STYLE LOCK:
     ${styleAnchor}
 
     NEGATIVE CONSTRAINTS:
-    - No changes to face proportions or expression.
-    - No new text, no watermark, no logos.
-    - No plastic skin, no over-smoothing, no heavy beauty filters.
+    - No text, no watermarks, no logos, no UI elements.
+    - No plastic/waxy skin. No "AI dream" artifacts.
+    - No extra limbs or duplicated features.
   `;
 
   try {
@@ -58,81 +73,47 @@ export async function upscalePortrait(base64Image: string, style: ElfStyle, leve
       }
     });
 
-    let imageUrl = '';
-    const candidate = response.candidates?.[0];
-    if (candidate?.content?.parts) {
-      for (const part of candidate.content.parts) {
-        if (part.inlineData) {
-          imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-          break;
-        }
-      }
-    }
+    const imageUrl = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
 
     if (!imageUrl) {
-      throw new Error("Upscaling magic failed to produce an image.");
+      throw new Error("Magic failed to manifest the image.");
     }
 
-    return imageUrl;
+    return `data:image/png;base64,${imageUrl}`;
   } catch (error: any) {
-    console.error("Upscaling failed:", error);
+    console.error("Upscaling service error:", error);
     throw error;
   }
 }
 
 export async function transformToElf(base64Image: string, style: ElfStyle = 'classic', groupType: GroupType = 'single'): Promise<string> {
+  if (!process.env.API_KEY) throw new Error("API_KEY is missing");
+  
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const styleAnchor = STYLE_ANCHORS[style];
 
-  let prompt = "";
+  const prompt = `
+    TASK: Transform the person(s) in the photo into realistic Lapland Christmas elves.
+    
+    IDENTITY RULES:
+    - Preserve face identity exactly. The person must be recognizable to their family.
+    - Keep age, gender, and basic facial structure unchanged.
+    
+    ${HEALTH_RULES}
 
-  if (groupType === 'group') {
-    prompt = `
-      TASK: Transform ALL people in the provided group photo into realistic Lapland Christmas elves.
+    STYLE SPECIFICATIONS:
+    - Replace clothing with high-quality elven attire: ${styleAnchor}
+    - Keep proportions realistic. This is a high-end photograph, not an illustration.
 
-      IDENTITY & FACE (CRITICAL):
-      - Preserve each person’s face identity exactly.
-      - Keep faces natural, correctly proportioned, and clearly visible.
-      - Use the same elf style for everyone.
+    COMPOSITION:
+    - Use a 3:4 portrait aspect ratio.
+    - ${groupType === 'group' ? 'Transform every single person in the group coherently.' : 'Focus on the main subject.'}
 
-      BEAUTIFICATION & HEALTH:
-      - Improve skin appearance to look healthy and radiant.
-      - Diminish dark circles under eyes and softly smooth wrinkles on all faces.
-      - People should look like refreshed, vibrant versions of themselves.
-
-      STYLE:
-      ${styleAnchor}
-
-      BACKGROUND CONTROL:
-      - Simple winter background consistent with the style, not distracting.
-
-      NEGATIVE CONSTRAINTS:
-      - No text, no symbols, no logos.
-      - No extra faces, no missing faces.
-      - No extra limbs, no cartoon style.
-    `;
-  } else {
-    prompt = `
-      TASK: Transform the person in the image into a realistic Lapland Christmas elf.
-
-      IDENTITY & FACE (CRITICAL):
-      - Preserve face identity exactly (same facial structure, age, gender, skin tone).
-      - Portrait framing (head-and-shoulders or waist-up).
-
-      BEAUTIFICATION & HEALTH:
-      - Improve the person's appearance to look very healthy and radiant.
-      - Diminish dark circles under the eyes and softly smooth out deep wrinkles and skin imperfections.
-      - The result should be a vibrant, healthy-looking elf version of the original person.
-
-      STYLE:
-      ${styleAnchor}
-
-      NEGATIVE CONSTRAINTS (ABSOLUTE):
-      - No text, no symbols, no logos, no watermarks.
-      - No extra faces, no extra limbs.
-      - No cartoon, no anime, no illustration, no plastic skin.
-    `;
-  }
+    NEGATIVE CONSTRAINTS:
+    - No cartoonish features, no pointy ears (unless subtle and realistic).
+    - No text, no symbols, no logos, no extra fingers.
+    - No face swapping or identity drift.
+  `;
 
   try {
     const response = await ai.models.generateContent({
@@ -156,24 +137,15 @@ export async function transformToElf(base64Image: string, style: ElfStyle = 'cla
       }
     });
 
-    let imageUrl = '';
-    const candidate = response.candidates?.[0];
-    if (candidate?.content?.parts) {
-      for (const part of candidate.content.parts) {
-        if (part.inlineData) {
-          imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-          break;
-        }
-      }
-    }
+    const imageUrl = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
 
     if (!imageUrl) {
       throw new Error("Tontun taika ei tuottanut kuvaa. Tarkista API-avaimen oikeudet.");
     }
 
-    return imageUrl;
+    return `data:image/png;base64,${imageUrl}`;
   } catch (error: any) {
-    console.error("Magic failed:", error);
+    console.error("Transformation service error:", error);
     throw error;
   }
 }

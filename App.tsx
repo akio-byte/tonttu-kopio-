@@ -1,8 +1,9 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { AppState, Language, ElfStyle, GroupType, UpscaleLevel } from './types';
 import { DICTIONARY } from './constants';
 import Snowfall from './components/Snowfall';
+import Aurora from './components/Aurora';
 import Certificate from './components/Certificate';
 import { transformToElf, upscalePortrait } from './services/geminiService';
 import html2canvas from 'html2canvas';
@@ -39,6 +40,7 @@ const App: React.FC = () => {
 
   const t = DICTIONARY[lang];
 
+  // Lifecycle & Music
   useEffect(() => {
     bgMusicRef.current = new Audio('https://www.soundjay.com/nature/sounds/wind-chime-1.mp3');
     if (bgMusicRef.current) {
@@ -53,7 +55,7 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const toggleMusic = () => {
+  const toggleMusic = useCallback(() => {
     if (!bgMusicRef.current) return;
     if (bgMusicPlaying) {
       bgMusicRef.current.pause();
@@ -61,7 +63,7 @@ const App: React.FC = () => {
       bgMusicRef.current.play().catch(() => {});
     }
     setBgMusicPlaying(!bgMusicPlaying);
-  };
+  }, [bgMusicPlaying]);
 
   const playSound = (type: 'capture' | 'magic' | 'hohoho' | 'click') => {
     const urls = {
@@ -78,8 +80,41 @@ const App: React.FC = () => {
   };
 
   const triggerVibrate = () => {
-    if ('vibrate' in navigator) {
-      navigator.vibrate(50);
+    if ('vibrate' in navigator) navigator.vibrate(50);
+  };
+
+  // State Transitions & Logic
+  const stopCamera = useCallback(() => {
+    if (videoRef.current?.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+    }
+  }, []);
+
+  const startCamera = async (mode: 'user' | 'environment' = facingMode) => {
+    stopCamera();
+    setErrorMsg('');
+    setState('camera');
+    if (!bgMusicPlaying && bgMusicRef.current) toggleMusic();
+    
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: mode, 
+          width: { ideal: 1920 }, 
+          height: { ideal: 1080 } 
+        } 
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch (err: any) {
+      console.error("Camera access denied:", err);
+      setErrorMsg(lang === 'FI' 
+        ? "Kameraa ei voitu avata. Tarkista, että olet antanut selaimelle luvan käyttää kameraa." 
+        : "Could not access camera. Please check your browser permissions.");
+      setState('error');
     }
   };
 
@@ -99,33 +134,6 @@ const App: React.FC = () => {
     setState('groupSelect');
   };
 
-  const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-    }
-  };
-
-  const startCamera = async (mode: 'user' | 'environment' = facingMode) => {
-    stopCamera();
-    setState('camera');
-    if (!bgMusicPlaying && bgMusicRef.current) {
-      toggleMusic();
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 720 } } 
-      });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-    } catch (err) {
-      setErrorMsg("Kameraa ei voitu avata. Tarkista luvat laitteen asetuksista.");
-      setState('error');
-    }
-  };
-
   const toggleCamera = () => {
     triggerVibrate();
     playSound('click');
@@ -139,17 +147,21 @@ const App: React.FC = () => {
       triggerVibrate();
       const canvas = canvasRef.current;
       const video = videoRef.current;
+      
+      // Use video's actual dimensions for best quality
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        // Only mirror if it's the front camera
+        ctx.save();
         if (facingMode === 'user') {
           ctx.translate(canvas.width, 0);
           ctx.scale(-1, 1);
         }
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/png');
+        ctx.restore();
+        
+        const dataUrl = canvas.toDataURL('image/png', 1.0);
         setCapturedImage(dataUrl);
         playSound('capture');
         stopCamera();
@@ -160,6 +172,8 @@ const App: React.FC = () => {
 
   const startMagic = async () => {
     if (!capturedImage) return;
+    triggerVibrate();
+    playSound('magic');
     setState('magic');
     setIsProcessing(true);
     setCurrentResolution('1K');
@@ -170,14 +184,12 @@ const App: React.FC = () => {
       setTimeout(() => playSound('hohoho'), 800);
       setState('result');
     } catch (err: any) {
+      console.error("Magic generation error:", err);
       if (err?.message?.includes('Requested entity was not found')) {
-        setErrorMsg("API-avain täytyy valita uudelleen.");
-        setState('keyGate');
-      } else if (err?.message?.includes('PERMISSION_DENIED')) {
-        setErrorMsg("API-avaimella ei ole oikeuksia. Valitse maksullinen projekti.");
+        setErrorMsg(lang === 'FI' ? "API-avain täytyy valita uudelleen." : "API Key needs to be reselected.");
         setState('keyGate');
       } else {
-        setErrorMsg("Taika kohtasi odottamattoman esteen. Yritä uudelleen.");
+        setErrorMsg(lang === 'FI' ? "Taika epäonnistui. Yritä uudelleen." : "Magic failed. Please try again.");
         setState('error');
       }
     } finally {
@@ -197,7 +209,8 @@ const App: React.FC = () => {
       playSound('magic');
     } catch (err: any) {
       console.error("Upscale failed:", err);
-      setErrorMsg("Terävöitys epäonnistui. Kokeile myöhemmin uudelleen.");
+      // Don't shift state to error, just notify
+      alert(lang === 'FI' ? "Terävöitys epäonnistui." : "Upscaling failed.");
     } finally {
       setIsUpscaling(false);
     }
@@ -210,18 +223,20 @@ const App: React.FC = () => {
     setResultImage(null);
     setFirstName('');
     setShowNameInput(false);
+    setErrorMsg('');
     setState('hero');
     setCurrentResolution('1K');
     stopCamera();
   };
 
+  // Added handleDownloadImage to fix the reference error on line 506.
   const handleDownloadImage = () => {
     if (!resultImage) return;
     triggerVibrate();
     playSound('click');
     const link = document.createElement('a');
     link.href = resultImage;
-    link.download = `Tonttu_Kuva_${firstName || '2024'}_${currentResolution}.png`;
+    link.download = `Tonttu_${firstName || 'Portretti'}.png`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -237,19 +252,11 @@ const App: React.FC = () => {
 
     try {
       const canvas = await html2canvas(element, {
-        scale: 4, 
+        scale: 3, // Balanced for quality vs memory
         useCORS: true,
         allowTaint: true,
         logging: false,
-        backgroundColor: null,
-        onclone: (clonedDoc) => {
-          const clonedElement = clonedDoc.getElementById('certificate-parchment');
-          if (clonedElement) {
-            clonedElement.style.transform = 'none';
-            clonedElement.style.width = '210mm';
-            clonedElement.style.height = '297mm';
-          }
-        }
+        backgroundColor: '#020617',
       });
 
       const imgData = canvas.toDataURL('image/png');
@@ -260,83 +267,57 @@ const App: React.FC = () => {
         compress: true
       });
 
-      const pageWidth = 210;
-      const pageHeight = 297;
-      const canvasWidth = canvas.width;
-      const canvasHeight = canvas.height;
-      const canvasAspectRatio = canvasWidth / canvasHeight;
-
-      let imgWidth = pageWidth;
-      let imgHeight = pageWidth / canvasAspectRatio;
-
-      if (imgHeight > pageHeight) {
-        imgHeight = pageHeight;
-        imgWidth = pageHeight * canvasAspectRatio;
-      }
-
-      const xOffset = (pageWidth - imgWidth) / 2;
-      const yOffset = (pageHeight - imgHeight) / 2;
-
-      pdf.addImage(imgData, 'PNG', xOffset, yOffset, imgWidth, imgHeight, undefined, 'SLOW');
+      pdf.addImage(imgData, 'PNG', 0, 0, 210, 297, undefined, 'FAST');
       pdf.save(`Tonttudiplomi_${firstName || 'Tonttu'}.pdf`);
-      
       playSound('magic');
     } catch (err) {
-      console.error('PDF generation failed:', err);
-      setErrorMsg("PDF-tiedoston luominen epäonnistui.");
+      console.error('PDF generation error:', err);
+      alert(lang === 'FI' ? "PDF-luonti epäonnistui." : "PDF generation failed.");
     } finally {
       setIsDownloading(false);
     }
   };
 
+  // --- RENDERING ---
+
   if (state === 'certificate' && resultImage) {
     return (
-      <div className="bg-[#020617] min-h-[100dvh] flex flex-col overflow-x-hidden print:bg-white print:min-h-0 print:overflow-visible">
-        {/* Navigation & Real-time Edit Bar */}
-        <div className="fixed top-0 left-0 right-0 z-50 bg-slate-950/80 backdrop-blur-xl border-b border-white/10 p-4 flex flex-col md:flex-row gap-4 justify-between items-center print:hidden">
-          <div className="flex gap-4 items-center">
+      <div className="bg-[#020617] min-h-[100dvh] flex flex-col print:bg-white print:min-h-0">
+        <div className="fixed top-0 left-0 right-0 z-50 bg-slate-950/90 backdrop-blur-xl border-b border-white/10 p-3 flex flex-col md:flex-row gap-3 justify-between items-center print:hidden">
+          <div className="flex gap-3 items-center w-full md:w-auto">
             <button 
-              onClick={() => { triggerVibrate(); playSound('click'); setState('result'); setShowNameInput(false); }}
-              className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-full border border-white/20 transition-all active:scale-95 text-xs font-bold flex items-center gap-2"
+              onClick={() => { triggerVibrate(); playSound('click'); setState('result'); }}
+              className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-full border border-white/20 transition-all active:scale-95 text-xs font-bold"
             >
-              <span>←</span> {lang === 'FI' ? 'Takaisin' : 'Back'}
+              ← {lang === 'FI' ? 'Muokkaa kuvaa' : 'Edit Photo'}
             </button>
-            <div className="h-6 w-[1px] bg-white/10 hidden md:block"></div>
-            <div className="flex gap-3">
-               <input 
-                 type="text" 
-                 value={firstName} 
-                 onChange={(e) => setFirstName(e.target.value)} 
-                 placeholder={t.inputNamePlaceholder} 
-                 className="bg-white/5 border border-white/20 rounded-lg px-4 py-2 text-sm text-white focus:border-yellow-400 focus:bg-white/10 outline-none transition-all w-48 font-christmas tracking-widest"
-               />
-               <input 
-                 type="text" 
-                 value={certDate} 
-                 onChange={(e) => setCertDate(e.target.value)} 
-                 className="bg-white/5 border border-white/20 rounded-lg px-4 py-2 text-sm text-white focus:border-yellow-400 focus:bg-white/10 outline-none transition-all w-32"
-               />
-            </div>
+            <input 
+              type="text" 
+              value={firstName} 
+              onChange={(e) => setFirstName(e.target.value)} 
+              placeholder={t.inputNamePlaceholder} 
+              className="bg-white/5 border border-white/20 rounded-lg px-3 py-2 text-xs text-white focus:border-yellow-400 focus:bg-white/10 outline-none w-full md:w-48 font-christmas tracking-widest"
+            />
           </div>
           
-          <div className="flex gap-2">
+          <div className="flex gap-2 w-full md:w-auto">
             <button 
               disabled={isDownloading}
               onClick={handleDownloadPdf}
-              className={`bg-yellow-500 hover:bg-yellow-400 text-slate-900 px-6 py-2 rounded-full font-bold shadow-xl transition-all active:scale-95 text-sm flex items-center gap-2 ${isDownloading ? 'opacity-50 cursor-wait' : ''}`}
+              className={`flex-1 md:flex-none bg-yellow-500 hover:bg-yellow-400 text-slate-900 px-5 py-2 rounded-full font-bold shadow-xl transition-all active:scale-95 text-xs flex items-center justify-center gap-2 ${isDownloading ? 'opacity-50' : ''}`}
             >
-              <span>{isDownloading ? '⏳' : '💾'}</span> {isDownloading ? (lang === 'FI' ? 'Luodaan...' : 'Creating...') : (lang === 'FI' ? 'Lataa PDF' : 'Download PDF')}
+              <span>{isDownloading ? '⏳' : '💾'}</span> {isDownloading ? '...' : (lang === 'FI' ? 'Lataa PDF' : 'Download PDF')}
             </button>
             <button 
               onClick={() => { triggerVibrate(); playSound('click'); window.print(); }}
-              className="bg-red-600 hover:bg-red-500 text-white px-6 py-2 rounded-full font-bold shadow-xl transition-all active:scale-95 text-sm flex items-center gap-2"
+              className="flex-1 md:flex-none bg-red-600 hover:bg-red-500 text-white px-5 py-2 rounded-full font-bold shadow-xl transition-all active:scale-95 text-xs flex items-center justify-center gap-2"
             >
                <span>🖨️</span> {t.btnPrint}
             </button>
           </div>
         </div>
 
-        <div className="pt-32 md:pt-24 pb-12 flex-1 flex items-start justify-center overflow-x-hidden no-scrollbar print:p-0 print:m-0 print:block">
+        <div className="pt-36 md:pt-24 pb-12 flex-1 flex items-start justify-center print:p-0">
           <Certificate name={firstName} imageUrl={resultImage} date={certDate} lang={lang} />
         </div>
       </div>
@@ -344,317 +325,233 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="relative min-h-[100dvh] w-full flex flex-col items-center justify-center text-white select-none overflow-x-hidden no-scrollbar">
-      <div className="absolute inset-0 z-0 bg-slate-950">
+    <div className="relative min-h-[100dvh] w-full flex flex-col items-center justify-center text-white select-none bg-slate-950 overflow-x-hidden">
+      {/* Visual Background */}
+      <div className="absolute inset-0 z-0 overflow-hidden">
          <img 
             src="https://images.unsplash.com/photo-1483921020237-2ff51e8e4b22?q=80&w=2000&auto=format&fit=crop" 
             className="w-full h-full object-cover opacity-20"
-            alt="Lapland Background"
+            alt=""
          />
-         <div className="absolute inset-0 bg-gradient-to-b from-slate-950/40 via-transparent to-slate-950/90" />
+         <div className="absolute inset-0 bg-gradient-to-b from-slate-950 via-transparent to-slate-950" />
+         <Aurora />
          <Snowfall />
       </div>
 
       <button 
         onClick={toggleMusic}
-        className="fixed top-6 right-6 z-50 w-12 h-12 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center hover:bg-white/20 transition-all active:scale-90 print:hidden"
+        className="fixed top-4 right-4 z-50 w-10 h-10 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center hover:bg-white/20 transition-all active:scale-90"
       >
         {bgMusicPlaying ? '🔊' : '🔇'}
       </button>
 
-      <div className="relative z-20 w-full max-w-4xl px-4 py-8 flex flex-col items-center text-center space-y-6 md:space-y-12 min-h-[100dvh] justify-between">
-        <div className={`mt-4 transition-all duration-1000 ${state === 'hero' ? 'translate-y-0 scale-100' : '-translate-y-4 scale-90'}`}>
-          <h1 className={`font-christmas text-red-100 drop-shadow-[0_8px_20px_rgba(255,255,255,0.3)] transition-all ${state === 'hero' ? 'text-7xl md:text-9xl' : 'text-5xl md:text-6xl'}`}>
+      <div className="relative z-20 w-full max-w-4xl px-4 py-6 flex flex-col items-center justify-between min-h-[100dvh]">
+        {/* Header */}
+        <div className={`mt-4 transition-all duration-700 ${state === 'hero' ? 'scale-100' : 'scale-90 opacity-60'}`}>
+          <h1 className="font-christmas text-red-100 text-5xl md:text-8xl drop-shadow-2xl">
             {t.title}
           </h1>
           {state === 'hero' && (
-            <p className="mt-4 text-xl md:text-3xl text-blue-100 opacity-90 animate-pulse font-light tracking-wide">
+            <p className="mt-2 text-lg md:text-2xl text-blue-100 opacity-80 animate-pulse font-light tracking-widest">
               {t.subtitle}
             </p>
           )}
         </div>
 
-        <div className="flex-1 w-full flex flex-col items-center justify-center">
+        {/* Content Area */}
+        <div className="flex-1 w-full flex flex-col items-center justify-center py-8">
           {state === 'hero' && (
-            <button onClick={checkApiKeyAndStart} className="group relative focus:outline-none">
-              <div className="absolute -inset-10 bg-red-600 rounded-full blur-[60px] opacity-20 group-hover:opacity-40 transition duration-1000 animate-pulse"></div>
-              <div className="relative bg-gradient-to-br from-red-600 to-red-800 hover:from-red-500 hover:to-red-700 text-white font-bold rounded-full border-4 border-white/20 shadow-[0_0_80px_rgba(220,38,38,0.4)] transition-all transform hover:scale-105 active:scale-90 flex items-center justify-center w-56 h-56 md:w-72 md:h-72 overflow-hidden">
-                <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                <span className="text-3xl md:text-4xl font-christmas leading-tight px-8 drop-shadow-md">{t.buttonBegin}</span>
+            <button onClick={checkApiKeyAndStart} className="group relative">
+              <div className="absolute -inset-10 bg-red-600 rounded-full blur-[60px] opacity-10 group-hover:opacity-30 transition duration-1000"></div>
+              <div className="relative bg-gradient-to-br from-red-600 to-red-800 text-white font-bold rounded-full border-4 border-white/10 shadow-2xl transition-all transform hover:scale-105 active:scale-95 flex items-center justify-center w-52 h-52 md:w-64 md:h-64">
+                <span className="text-2xl md:text-3xl font-christmas px-6 text-center">{t.buttonBegin}</span>
               </div>
             </button>
           )}
 
           {state === 'keyGate' && (
-            <div className="bg-slate-900/80 backdrop-blur-3xl p-10 md:p-14 rounded-[2.5rem] border border-white/20 shadow-2xl max-w-lg w-full animate-in zoom-in-95 duration-500">
-              <h2 className="text-4xl font-christmas text-red-100 mb-6">{t.keyGateTitle}</h2>
-              <p className="text-blue-100/80 mb-10 leading-relaxed text-lg">
-                {errorMsg && <span className="block text-red-400 font-bold mb-4 bg-red-400/10 p-4 rounded-xl border border-red-400/20">{errorMsg}</span>}
-                {t.keyGateDesc}
-              </p>
-              <div className="flex flex-col gap-5">
-                <button 
-                  onClick={handleOpenKeyPicker} 
-                  className="bg-gradient-to-r from-yellow-400 to-yellow-600 text-slate-950 py-5 rounded-full font-bold text-2xl font-christmas shadow-2xl hover:scale-[1.02] active:scale-95 transition-all"
-                >
-                  {t.keyGateButton}
-                </button>
-                <a 
-                  href="https://ai.google.dev/gemini-api/docs/billing" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="text-white/50 text-sm underline hover:text-white/80 transition-colors"
-                >
-                  {t.keyGateBillingLink}
-                </a>
-                <button onClick={reset} className="text-white/40 mt-4 text-sm hover:text-white/70 transition-colors">Takaisin</button>
-              </div>
+            <div className="bg-slate-900/80 backdrop-blur-2xl p-8 rounded-[2rem] border border-white/10 shadow-2xl max-sm w-full text-center">
+              <h2 className="text-2xl font-christmas text-red-100 mb-4">{t.keyGateTitle}</h2>
+              <p className="text-sm text-blue-100/70 mb-8">{t.keyGateDesc}</p>
+              <button 
+                onClick={handleOpenKeyPicker} 
+                className="w-full bg-yellow-500 text-slate-950 py-4 rounded-xl font-bold hover:scale-[1.02] active:scale-95 transition-all"
+              >
+                {t.keyGateButton}
+              </button>
+              <button onClick={reset} className="mt-4 text-xs text-white/30 hover:underline">Takaisin</button>
             </div>
           )}
 
           {state === 'groupSelect' && (
-            <div className="bg-slate-900/60 backdrop-blur-3xl p-8 md:p-12 rounded-[3rem] border border-white/10 shadow-2xl w-full max-w-2xl animate-in zoom-in-95">
-               <h2 className="text-3xl md:text-5xl font-christmas text-red-100 mb-8">{t.groupSelectTitle}</h2>
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 mb-10">
-                  <button
-                    onClick={() => { triggerVibrate(); playSound('click'); setGroupType('single'); setFacingMode('user'); startCamera('user'); }}
-                    className="group relative overflow-hidden rounded-2xl border-2 border-white/10 bg-white/5 p-8 transition-all hover:bg-white/10 hover:border-red-500 hover:scale-[1.02]"
-                  >
-                    <div className="text-5xl mb-4 group-hover:scale-110 transition-transform">👤</div>
-                    <h3 className="text-2xl font-christmas text-white mb-2">{t.groupSelectSingle}</h3>
-                    <p className="text-white/60 text-sm">{t.groupSelectSingleDesc}</p>
-                  </button>
-                  <button
-                    onClick={() => { triggerVibrate(); playSound('click'); setGroupType('group'); setFacingMode('environment'); startCamera('environment'); }}
-                    className="group relative overflow-hidden rounded-2xl border-2 border-white/10 bg-white/5 p-8 transition-all hover:bg-white/10 hover:border-red-500 hover:scale-[1.02]"
-                  >
-                    <div className="text-5xl mb-4 group-hover:scale-110 transition-transform">👥</div>
-                    <h3 className="text-2xl font-christmas text-white mb-2">{t.groupSelectGroup}</h3>
-                    <p className="text-white/60 text-sm">{t.groupSelectGroupDesc}</p>
-                  </button>
-               </div>
-               <button onClick={reset} className="text-white/40 text-sm underline">Peruuta</button>
+            <div className="w-full max-w-2xl grid grid-cols-1 md:grid-cols-2 gap-4">
+              <button
+                onClick={() => { setGroupType('single'); setFacingMode('user'); startCamera('user'); }}
+                className="bg-white/5 backdrop-blur-xl border border-white/10 p-8 rounded-2xl hover:bg-white/10 transition-all text-center group"
+              >
+                <div className="text-4xl mb-4 group-hover:scale-110 transition-transform">👤</div>
+                <h3 className="text-xl font-christmas mb-1">{t.groupSelectSingle}</h3>
+                <p className="text-xs text-white/40">{t.groupSelectSingleDesc}</p>
+              </button>
+              <button
+                onClick={() => { setGroupType('group'); setFacingMode('environment'); startCamera('environment'); }}
+                className="bg-white/5 backdrop-blur-xl border border-white/10 p-8 rounded-2xl hover:bg-white/10 transition-all text-center group"
+              >
+                <div className="text-4xl mb-4 group-hover:scale-110 transition-transform">👥</div>
+                <h3 className="text-xl font-christmas mb-1">{t.groupSelectGroup}</h3>
+                <p className="text-xs text-white/40">{t.groupSelectGroupDesc}</p>
+              </button>
             </div>
           )}
 
           {state === 'camera' && (
-            <div className="relative w-full max-w-md md:max-w-2xl aspect-[3/4] md:aspect-video rounded-[2rem] md:rounded-[3rem] overflow-hidden border-8 border-white/20 shadow-2xl animate-in slide-in-from-bottom-12 duration-700">
+            <div className="relative w-full max-w-2xl aspect-[3/4] md:aspect-video bg-black rounded-3xl overflow-hidden border-4 border-white/10 shadow-2xl">
               <video 
                 ref={videoRef} 
                 autoPlay 
                 playsInline 
                 className={`w-full h-full object-cover ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`} 
               />
-              <div className="absolute inset-0 pointer-events-none border-[16px] border-white/5"></div>
+              <div className="absolute inset-0 pointer-events-none border-[12px] border-white/5"></div>
               
-              {/* Shutter Button */}
-              <div className="absolute bottom-12 left-0 right-0 flex justify-center items-center gap-8">
+              <div className="absolute bottom-8 left-0 right-0 flex justify-center items-center gap-6">
                 <button 
                   onClick={toggleCamera} 
-                  className="bg-white/10 backdrop-blur-md border border-white/20 text-white rounded-full p-4 hover:bg-white/20 transition-all active:scale-90"
-                  title="Vaihda kamera"
+                  className="bg-black/40 backdrop-blur-md border border-white/20 text-white rounded-full p-4 hover:bg-white/20 transition-all"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
                 </button>
-
                 <button 
                   onClick={capturePhoto} 
-                  className="bg-white text-slate-900 rounded-full p-6 md:p-8 shadow-[0_0_50px_rgba(255,255,255,0.6)] transform transition hover:scale-110 active:scale-75 relative"
+                  className="bg-white text-slate-900 rounded-full p-1 shadow-2xl hover:scale-105 active:scale-90 transition-all"
                 >
-                  <div className="w-14 h-14 md:w-16 md:h-16 border-[6px] border-red-600 rounded-full"></div>
-                  <div className="absolute -inset-2 rounded-full border border-white/40 animate-ping opacity-20"></div>
+                  <div className="w-16 h-16 md:w-20 md:h-20 border-4 border-red-600 rounded-full bg-transparent flex items-center justify-center">
+                    <div className="w-12 h-12 md:w-16 md:h-16 bg-red-600 rounded-full"></div>
+                  </div>
                 </button>
-
-                <div className="w-16"></div> {/* Spacer to keep shutter centered */}
-              </div>
-
-              <div className="absolute top-10 left-0 right-0 text-white font-christmas text-2xl tracking-[0.2em] drop-shadow-xl animate-pulse">
-                {t.smileText}
+                <button onClick={reset} className="bg-black/40 backdrop-blur-md border border-white/20 text-white rounded-full p-4 hover:bg-white/20">
+                  <span className="text-sm font-bold">✕</span>
+                </button>
               </div>
             </div>
           )}
 
           {state === 'styleSelect' && capturedImage && (
-            <div className="bg-slate-900/60 backdrop-blur-3xl p-8 md:p-12 rounded-[3rem] border border-white/10 shadow-2xl w-full max-w-2xl animate-in zoom-in-95">
-               <h2 className="text-3xl md:text-5xl font-christmas text-red-100 mb-8">{t.selectStyleTitle}</h2>
-               <div className="grid grid-cols-2 gap-4 md:gap-6 mb-10">
-                  {(['classic', 'frost', 'forest', 'royal'] as ElfStyle[]).map((style) => (
-                    <button
-                      key={style}
-                      onClick={() => { triggerVibrate(); playSound('click'); setSelectedStyle(style); }}
-                      className={`relative overflow-hidden rounded-2xl border-4 transition-all duration-300 p-4 md:p-6 flex flex-col items-center justify-center gap-2 group ${selectedStyle === style ? 'border-yellow-400 bg-white/20 scale-105 shadow-[0_0_20px_rgba(250,204,21,0.3)]' : 'border-white/10 bg-white/5 hover:border-white/30 hover:bg-white/10'}`}
-                    >
-                      <span className="text-3xl md:text-4xl">
-                        {style === 'classic' && '🎅'}
-                        {style === 'frost' && '❄️'}
-                        {style === 'forest' && '🌲'}
-                        {style === 'royal' && '👑'}
-                      </span>
-                      <span className="font-christmas text-xl md:text-2xl tracking-wide">{t[`style${style.charAt(0).toUpperCase() + style.slice(1)}` as keyof typeof t]}</span>
-                      {selectedStyle === style && <div className="absolute top-2 right-2 text-yellow-400">✨</div>}
-                    </button>
-                  ))}
-               </div>
-               <button 
-                 onClick={startMagic} 
-                 className="bg-gradient-to-r from-red-600 to-red-800 text-white w-full py-5 rounded-full font-bold text-2xl md:text-3xl font-christmas shadow-2xl hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3"
-               >
-                 <span>✨</span> {t.btnStartMagic}
-               </button>
-               <button onClick={reset} className="text-white/40 mt-6 text-sm underline">Takaisin alkuun</button>
+            <div className="w-full max-w-xl flex flex-col items-center">
+              <div className="grid grid-cols-2 gap-4 w-full mb-8">
+                {(['classic', 'frost', 'forest', 'royal'] as ElfStyle[]).map((style) => (
+                  <button
+                    key={style}
+                    onClick={() => setSelectedStyle(style)}
+                    className={`relative p-6 rounded-2xl border-2 transition-all text-center ${selectedStyle === style ? 'border-yellow-400 bg-white/10' : 'border-white/10 bg-white/5 hover:border-white/20'}`}
+                  >
+                    <span className="text-3xl block mb-2">
+                      {style === 'classic' && '🎅'}
+                      {style === 'frost' && '❄️'}
+                      {style === 'forest' && '🌲'}
+                      {style === 'royal' && '👑'}
+                    </span>
+                    <span className="font-christmas text-lg">{t[`style${style.charAt(0).toUpperCase() + style.slice(1)}` as keyof typeof t]}</span>
+                  </button>
+                ))}
+              </div>
+              <button 
+                onClick={startMagic} 
+                className="w-full bg-red-600 py-5 rounded-full font-bold text-2xl font-christmas shadow-xl hover:bg-red-500 transition-all active:scale-95"
+              >
+                {t.btnStartMagic} ✨
+              </button>
             </div>
           )}
 
-          {(state === 'magic' || isUpscaling) && (
-            <div className="flex flex-col items-center space-y-10 px-4">
-              <div className="relative">
-                <div className="absolute inset-0 bg-yellow-400 blur-[80px] opacity-40 animate-pulse"></div>
-                <div className="relative w-40 h-40 flex items-center justify-center">
-                   <div className="absolute inset-0 border-4 border-dashed border-white/20 rounded-full animate-[spin_8s_linear_infinite]"></div>
-                   <div className="absolute inset-4 border-4 border-dashed border-yellow-400/40 rounded-full animate-[spin_4s_linear_infinite_reverse]"></div>
-                   <div className="text-8xl md:text-9xl animate-[spin_6s_linear_infinite] drop-shadow-2xl">❄️</div>
+          {(isProcessing || isUpscaling) && (
+            <div className="flex flex-col items-center text-center px-4 max-w-sm">
+              <div className="w-24 h-24 relative mb-8">
+                <div className="absolute inset-0 border-4 border-yellow-400/20 rounded-full"></div>
+                <div className="absolute inset-0 border-4 border-yellow-400 rounded-full border-t-transparent animate-spin"></div>
+                <div className="absolute inset-0 flex items-center justify-center text-4xl">❄️</div>
+              </div>
+              <h2 className="text-2xl font-christmas text-red-100 mb-2">
+                {isUpscaling ? t.upscalingText : t.processing}
+              </h2>
+              <p className="text-sm text-blue-100/60 italic leading-relaxed">
+                {t.processingSub}
+              </p>
+            </div>
+          )}
+
+          {state === 'result' && resultImage && !isProcessing && !isUpscaling && (
+            <div className="w-full max-w-xl flex flex-col items-center space-y-6">
+              <div className="relative w-full rounded-2xl overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.5)] border-4 border-white/10">
+                <img src={resultImage} className="w-full h-auto" alt="Result" />
+                <div className="absolute top-4 right-4 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-bold tracking-widest border border-white/20">
+                  {currentResolution}
                 </div>
               </div>
-              <div className="space-y-4">
-                <h2 className="text-4xl md:text-5xl font-christmas text-red-200 drop-shadow-lg">
-                  {isUpscaling ? t.upscalingText : t.processing}
-                </h2>
-                <p className="italic text-blue-100/70 text-lg md:text-xl animate-pulse font-light max-w-md">
-                   {t.processingSub}
-                </p>
+              
+              <div className="w-full grid grid-cols-1 gap-3 px-4">
+                <button 
+                  onClick={() => setState('certificate')}
+                  className="bg-yellow-500 text-slate-950 py-4 rounded-full font-bold text-xl font-christmas shadow-lg hover:scale-[1.02] active:scale-95 transition-all"
+                >
+                  📜 {t.btnCreateCert}
+                </button>
+                
+                {currentResolution !== '4K' && (
+                  <div className="flex gap-2 w-full">
+                    <button 
+                      onClick={() => handleUpscale('2K')}
+                      disabled={currentResolution === '2K'}
+                      className="flex-1 bg-white/10 py-3 rounded-full text-xs font-bold border border-white/10 hover:bg-white/20 transition-all"
+                    >
+                      ✨ {t.btnUpscale} (2K)
+                    </button>
+                    <button 
+                      onClick={() => handleUpscale('4K')}
+                      className="flex-1 bg-white/10 py-3 rounded-full text-xs font-bold border border-white/10 hover:bg-white/20 transition-all"
+                    >
+                      ✨ {t.btnUpscale} (4K)
+                    </button>
+                  </div>
+                )}
+                
+                <button 
+                  onClick={handleDownloadImage}
+                  className="text-white/40 text-sm hover:text-white/80 transition-colors"
+                >
+                  {t.btnDownloadImage}
+                </button>
+                <button onClick={reset} className="text-white/20 text-xs mt-4">Uusi matka</button>
               </div>
             </div>
-          )}
-
-          {state === 'result' && resultImage && !isUpscaling && (
-            <div className="flex flex-col items-center space-y-8 w-full max-w-md md:max-w-2xl animate-in zoom-in-95 duration-1000 px-2">
-              {!showNameInput ? (
-                <>
-                  <div className="relative group">
-                    <div className="absolute -inset-8 bg-yellow-500/20 blur-[100px] rounded-full animate-pulse"></div>
-                    <div className="relative p-2 bg-gradient-to-br from-red-600 via-yellow-400 to-red-800 rounded-[2.5rem] md:rounded-[3.5rem] shadow-[0_30px_90px_rgba(0,0,0,0.7)] magic-aura overflow-hidden">
-                      <img 
-                        src={resultImage} 
-                        alt="Elf Result" 
-                        className="rounded-[2rem] md:rounded-[3rem] w-full h-auto max-h-[60vh] object-contain mx-auto transition-transform group-hover:scale-[1.01] duration-700" 
-                      />
-                      <div className="absolute top-6 right-6 bg-slate-900/80 backdrop-blur-md border border-white/20 rounded-full px-4 py-1.5 text-xs font-bold text-yellow-400 shadow-xl">
-                        {currentResolution}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Upscale Options */}
-                  {currentResolution !== '4K' && (
-                    <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-[2rem] p-6 w-full max-w-lg flex flex-col items-center gap-4">
-                       <h4 className="text-yellow-400 font-christmas text-2xl">✨ {t.btnUpscale}</h4>
-                       <div className="flex gap-4 w-full">
-                          {(['2K', '4K'] as UpscaleLevel[]).map(res => (
-                            (res === '2K' && currentResolution === '1K') || (res === '4K') ? (
-                              <button 
-                                key={res}
-                                onClick={() => handleUpscale(res)}
-                                className="flex-1 bg-white/10 hover:bg-white/20 text-white py-3 rounded-xl font-bold border border-white/20 transition-all active:scale-95"
-                              >
-                                {res}
-                              </button>
-                            ) : null
-                          ))}
-                       </div>
-                    </div>
-                  )}
-
-                  <div className="flex flex-col gap-4 w-full px-8">
-                    <button 
-                      onClick={() => { triggerVibrate(); playSound('click'); setShowNameInput(true); }} 
-                      className="bg-gradient-to-r from-yellow-400 to-yellow-600 text-slate-950 w-full py-5 rounded-full font-bold text-2xl md:text-3xl font-christmas shadow-2xl hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3"
-                    >
-                      <span>📜</span> {t.btnCreateCert}
-                    </button>
-                    <button 
-                      onClick={handleDownloadImage}
-                      className="bg-white/10 backdrop-blur-xl border border-white/20 w-full py-5 rounded-full font-bold text-xl font-christmas hover:bg-white/20 active:scale-95 transition-all text-white/90 flex items-center justify-center gap-3"
-                    >
-                      <span>💾</span> {t.btnDownloadImage}
-                    </button>
-                    <button 
-                      onClick={reset} 
-                      className="bg-white/5 w-full py-4 rounded-full font-bold text-lg font-christmas hover:bg-white/10 active:scale-95 transition-all text-white/40"
-                    >
-                      {t.backHome}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <form 
-                  onSubmit={(e) => { e.preventDefault(); if(firstName.trim()) { triggerVibrate(); playSound('click'); setState('certificate'); } }} 
-                  className="bg-slate-900/80 backdrop-blur-3xl p-10 md:p-14 rounded-[3rem] border border-white/20 shadow-2xl w-full max-w-md mx-auto animate-in slide-in-from-bottom-12 duration-500"
-                >
-                  <h3 className="text-4xl md:text-5xl font-christmas text-red-100 mb-10 leading-tight">{t.btnCreateCert}</h3>
-                  <div className="relative mb-10">
-                    <input 
-                      type="text" 
-                      value={firstName} 
-                      onChange={(e) => setFirstName(e.target.value)} 
-                      placeholder={groupType === 'single' ? t.inputNamePlaceholder : t.inputGroupNamePlaceholder} 
-                      className="w-full bg-white/5 border-2 border-white/20 rounded-2xl px-8 py-5 text-2xl text-center focus:border-yellow-400 focus:bg-white/10 outline-none transition-all placeholder:text-white/20 text-white font-christmas tracking-widest" 
-                      autoFocus 
-                    />
-                  </div>
-                  <div className="flex gap-5">
-                    <button 
-                      type="submit" 
-                      disabled={!firstName.trim()} 
-                      className="flex-1 bg-gradient-to-r from-red-600 to-red-800 disabled:opacity-30 text-white py-5 rounded-full font-bold text-2xl active:scale-95 shadow-xl font-christmas tracking-widest"
-                    >
-                      {lang === 'FI' ? 'Jatka' : 'Continue'}
-                    </button>
-                    <button 
-                      type="button" 
-                      onClick={() => { triggerVibrate(); playSound('click'); setShowNameInput(false); }} 
-                      className="w-20 h-20 rounded-full bg-white/10 flex items-center justify-center text-3xl hover:bg-white/20 transition-all active:scale-90"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </form>
-              )}
-            </>
           )}
 
           {state === 'error' && (
-            <div className="text-center space-y-10 px-8 animate-in zoom-in-95 duration-500">
-              <div className="text-8xl md:text-9xl drop-shadow-2xl">❄️</div>
-              <div className="space-y-6">
-                <h2 className="text-3xl md:text-4xl font-christmas text-red-200 leading-relaxed">{errorMsg || t.errorTitle}</h2>
-                <button 
-                  onClick={reset} 
-                  className="bg-white/10 backdrop-blur-md border border-white/20 px-12 py-5 rounded-full font-bold text-2xl active:scale-95 transition-all hover:bg-white/20 font-christmas"
-                >
-                  {t.errorAction}
-                </button>
-              </div>
+            <div className="text-center p-8 bg-red-950/20 rounded-2xl border border-red-500/20 max-w-sm">
+              <h2 className="text-xl font-christmas mb-4">{errorMsg || t.errorTitle}</h2>
+              <button onClick={reset} className="bg-white/10 px-8 py-3 rounded-full text-sm font-bold hover:bg-white/20 transition-all">
+                {t.errorAction}
+              </button>
             </div>
           )}
         </div>
 
-        <div className="flex flex-col items-center space-y-8 pb-10">
-          <div className="flex gap-6">
+        {/* Footer */}
+        <div className="flex flex-col items-center gap-4 py-8">
+          <div className="flex gap-4">
             {['FI', 'EN'].map(l => (
               <button 
                 key={l} 
-                onClick={() => { triggerVibrate(); playSound('click'); setLang(l as Language); }} 
-                className={`w-14 h-14 rounded-full border-2 transition-all flex items-center justify-center font-bold text-lg shadow-xl ${lang === l ? 'bg-red-600 border-red-400 scale-110' : 'bg-white/5 border-white/10 opacity-40 hover:opacity-100'}`}
+                onClick={() => setLang(l as Language)} 
+                className={`w-10 h-10 rounded-full border text-xs font-bold transition-all ${lang === l ? 'bg-red-600 border-red-400' : 'bg-white/5 border-white/10 opacity-40'}`}
               >
                 {l}
               </button>
             ))}
           </div>
-          <p className="text-xs md:text-sm opacity-50 tracking-[0.4em] font-medium uppercase px-4 text-center max-w-xs md:max-w-none">
-            {t.footerText}
-          </p>
+          <p className="text-[10px] opacity-30 tracking-[0.4em] uppercase">{t.footerText}</p>
         </div>
       </div>
       <canvas ref={canvasRef} className="hidden" />
