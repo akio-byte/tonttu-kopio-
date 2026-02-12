@@ -282,8 +282,14 @@ const App: React.FC = () => {
 
   if (state === 'certificate' && resultImage) {
     return (
-      <div className="bg-[#020617] min-h-[100dvh] flex flex-col print:bg-white print:min-h-0">
-        <div className="fixed top-0 left-0 right-0 z-50 bg-slate-950/90 backdrop-blur-xl border-b border-white/10 p-3 flex flex-col md:flex-row gap-3 justify-between items-center print:hidden">
+      <div className="relative bg-[#020617] min-h-[100dvh] flex flex-col print:bg-white print:min-h-0 overflow-x-hidden">
+        {/* Background Visuals for Certificate State */}
+        <div className="fixed inset-0 z-0 overflow-hidden no-print">
+           <Aurora />
+           <Snowfall />
+        </div>
+
+        <div className="relative z-10 fixed top-0 left-0 right-0 z-50 bg-slate-950/90 backdrop-blur-xl border-b border-white/10 p-3 flex flex-col md:flex-row gap-3 justify-between items-center print:hidden">
           <div className="flex gap-3 items-center w-full md:w-auto">
             <button 
               onClick={() => { triggerVibrate(); playSound('click'); setState('result'); }}
@@ -317,7 +323,7 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        <div className="pt-36 md:pt-24 pb-12 flex-1 flex items-start justify-center print:p-0">
+        <div className="relative z-10 pt-36 md:pt-24 pb-12 flex-1 flex items-start justify-center print:p-0">
           <Certificate name={firstName} imageUrl={resultImage} date={certDate} lang={lang} />
         </div>
       </div>
